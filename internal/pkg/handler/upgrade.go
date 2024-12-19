@@ -212,6 +212,7 @@ func PerformAction(clients kube.Clients, config util.Config, upgradeFuncs callba
 
 		isResourceExcluded := false
 
+		//TODO: Add exclusion
 		switch config.Type {
 		case constants.ConfigmapEnvVarPostfix:
 			if foundExcludeConfigmap {
@@ -336,6 +337,10 @@ func getVolumeMountName(volumes []v1.Volume, mountType string, volumeName string
 						return volumes[i].Name
 					}
 				}
+			}
+		} else if mountType == constants.SecretProviderClassEnvVarPostfix {
+			if volumes[i].CSI != nil && volumes[i].CSI.VolumeAttributes["secretProviderClass"] == volumeName {
+				return volumes[i].Name
 			}
 		}
 	}
