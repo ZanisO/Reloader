@@ -201,6 +201,7 @@ func PerformAction(clients kube.Clients, config util.Config, upgradeFuncs callba
 		typedAutoAnnotationEnabledValue, foundTypedAuto := annotations[config.TypedAutoAnnotation]
 		excludeConfigmapAnnotationValue, foundExcludeConfigmap := annotations[options.ConfigmapExcludeReloaderAnnotation]
 		excludeSecretAnnotationValue, foundExcludeSecret := annotations[options.SecretExcludeReloaderAnnotation]
+		excludeSecretProviderClassProviderAnnotationValue, foundExcludeSecretProviderClass := annotations[options.SecretProviderClassExcludeReloaderAnnotation]
 
 		if !found && !foundAuto && !foundTypedAuto && !foundSearchAnn {
 			annotations = upgradeFuncs.PodAnnotationsFunc(i)
@@ -212,7 +213,6 @@ func PerformAction(clients kube.Clients, config util.Config, upgradeFuncs callba
 
 		isResourceExcluded := false
 
-		//TODO: Add exclusion
 		switch config.Type {
 		case constants.ConfigmapEnvVarPostfix:
 			if foundExcludeConfigmap {
@@ -221,6 +221,10 @@ func PerformAction(clients kube.Clients, config util.Config, upgradeFuncs callba
 		case constants.SecretEnvVarPostfix:
 			if foundExcludeSecret {
 				isResourceExcluded = checkIfResourceIsExcluded(config.ResourceName, excludeSecretAnnotationValue)
+			}
+		case constants.SecretProviderClassEnvVarPostfix:
+			if foundExcludeSecretProviderClass {
+				isResourceExcluded = checkIfResourceIsExcluded(config.ResourceName, excludeSecretProviderClassProviderAnnotationValue)
 			}
 		}
 
