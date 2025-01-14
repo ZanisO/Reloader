@@ -26,6 +26,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	core_v1 "k8s.io/client-go/kubernetes/typed/core/v1"
+	csiv1 "sigs.k8s.io/secrets-store-csi-driver/apis/v1"
+	csiclient "sigs.k8s.io/secrets-store-csi-driver/pkg/client/clientset/versioned"
+	csiclient_v1 "sigs.k8s.io/secrets-store-csi-driver/pkg/client/clientset/versioned/typed/apis/v1"
 )
 
 var (
@@ -34,6 +37,8 @@ var (
 	ConfigmapResourceType = "configMaps"
 	// SecretResourceType is a resource type which controller watches for changes
 	SecretResourceType = "secrets"
+	// SecretproviderclasspodstatusResourceType is a resource type which controller watches for changes
+	SecretProviderClassPodStatusResourceType = "secretproviderclasspodstatuses"
 )
 
 var (
@@ -69,16 +74,16 @@ func DeleteNamespace(namespace string, client kubernetes.Interface) {
 	}
 }
 
-func getObjectMeta(namespace string, name string, autoReload bool, secretAutoReload bool, configmapAutoReload bool) metav1.ObjectMeta {
+func getObjectMeta(namespace string, name string, autoReload bool, secretAutoReload bool, configmapAutoReload bool, secretproviderclass bool) metav1.ObjectMeta {
 	return metav1.ObjectMeta{
 		Name:        name,
 		Namespace:   namespace,
 		Labels:      map[string]string{"firstLabel": "temp"},
-		Annotations: getAnnotations(name, autoReload, secretAutoReload, configmapAutoReload),
+		Annotations: getAnnotations(name, autoReload, secretAutoReload, configmapAutoReload, secretproviderclass),
 	}
 }
 
-func getAnnotations(name string, autoReload bool, secretAutoReload bool, configmapAutoReload bool) map[string]string {
+func getAnnotations(name string, autoReload bool, secretAutoReload bool, configmapAutoReload bool, secretproviderclass bool) map[string]string {
 	annotations := make(map[string]string)
 	if autoReload {
 		annotations[options.ReloaderAutoAnnotation] = "true"
@@ -89,13 +94,18 @@ func getAnnotations(name string, autoReload bool, secretAutoReload bool, configm
 	if configmapAutoReload {
 		annotations[options.ConfigmapReloaderAutoAnnotation] = "true"
 	}
+	if secretproviderclass {
+		annotations[options.SecretProviderClassReloaderAutoAnnotation] = "true"
+	}
 
 	if len(annotations) > 0 {
 		return annotations
 	} else {
 		return map[string]string{
-			options.ConfigmapUpdateOnChangeAnnotation: name,
-			options.SecretUpdateOnChangeAnnotation:    name}
+			options.ConfigmapUpdateOnChangeAnnotation:           name,
+			options.SecretUpdateOnChangeAnnotation:              name,
+			options.SecretProviderClassUpdateOnChangeAnnotation: name,
+		}
 	}
 }
 
@@ -170,6 +180,15 @@ func getVolumes(name string) []v1.Volume {
 				},
 			},
 		},
+		{
+			Name: "secretproviderclass",
+			VolumeSource: v1.VolumeSource{
+				CSI: &v1.CSIVolumeSource{
+					Driver:           "secrets-store.csi.k8s.io",
+					VolumeAttributes: map[string]string{"secretProviderClass": name},
+				},
+			},
+		},
 	}
 }
 
@@ -182,6 +201,10 @@ func getVolumeMounts(name string) []v1.VolumeMount {
 		{
 			MountPath: "etc/sec",
 			Name:      "secret",
+		},
+		{
+			MountPath: "etc/spc",
+			Name:      "secretproviderclass",
 		},
 		{
 			MountPath: "etc/projectedconfig",
@@ -342,7 +365,7 @@ func getPodTemplateSpecWithInitContainerAndEnv(name string) v1.PodTemplateSpec {
 func GetDeployment(namespace string, deploymentName string) *appsv1.Deployment {
 	replicaset := int32(1)
 	return &appsv1.Deployment{
-		ObjectMeta: getObjectMeta(namespace, deploymentName, false, false, false),
+		ObjectMeta: getObjectMeta(namespace, deploymentName, false, false, false, false),
 		Spec: appsv1.DeploymentSpec{
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{"secondLabel": "temp"},
@@ -361,7 +384,7 @@ func GetDeploymentConfig(namespace string, deploymentConfigName string) *openshi
 	replicaset := int32(1)
 	podTemplateSpecWithVolume := getPodTemplateSpecWithVolumes(deploymentConfigName)
 	return &openshiftv1.DeploymentConfig{
-		ObjectMeta: getObjectMeta(namespace, deploymentConfigName, false, false, false),
+		ObjectMeta: getObjectMeta(namespace, deploymentConfigName, false, false, false, false),
 		Spec: openshiftv1.DeploymentConfigSpec{
 			Replicas: replicaset,
 			Strategy: openshiftv1.DeploymentStrategy{
@@ -376,7 +399,7 @@ func GetDeploymentConfig(namespace string, deploymentConfigName string) *openshi
 func GetDeploymentWithInitContainer(namespace string, deploymentName string) *appsv1.Deployment {
 	replicaset := int32(1)
 	return &appsv1.Deployment{
-		ObjectMeta: getObjectMeta(namespace, deploymentName, false, false, false),
+		ObjectMeta: getObjectMeta(namespace, deploymentName, false, false, false, false),
 		Spec: appsv1.DeploymentSpec{
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{"secondLabel": "temp"},
@@ -394,7 +417,7 @@ func GetDeploymentWithInitContainer(namespace string, deploymentName string) *ap
 func GetDeploymentWithInitContainerAndEnv(namespace string, deploymentName string) *appsv1.Deployment {
 	replicaset := int32(1)
 	return &appsv1.Deployment{
-		ObjectMeta: getObjectMeta(namespace, deploymentName, true, false, false),
+		ObjectMeta: getObjectMeta(namespace, deploymentName, true, false, false, false),
 		Spec: appsv1.DeploymentSpec{
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{"secondLabel": "temp"},
@@ -411,7 +434,7 @@ func GetDeploymentWithInitContainerAndEnv(namespace string, deploymentName strin
 func GetDeploymentWithEnvVars(namespace string, deploymentName string) *appsv1.Deployment {
 	replicaset := int32(1)
 	return &appsv1.Deployment{
-		ObjectMeta: getObjectMeta(namespace, deploymentName, true, false, false),
+		ObjectMeta: getObjectMeta(namespace, deploymentName, true, false, false, false),
 		Spec: appsv1.DeploymentSpec{
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{"secondLabel": "temp"},
@@ -429,7 +452,7 @@ func GetDeploymentConfigWithEnvVars(namespace string, deploymentConfigName strin
 	replicaset := int32(1)
 	podTemplateSpecWithEnvVars := getPodTemplateSpecWithEnvVars(deploymentConfigName)
 	return &openshiftv1.DeploymentConfig{
-		ObjectMeta: getObjectMeta(namespace, deploymentConfigName, false, false, false),
+		ObjectMeta: getObjectMeta(namespace, deploymentConfigName, false, false, false, false),
 		Spec: openshiftv1.DeploymentConfigSpec{
 			Replicas: replicaset,
 			Strategy: openshiftv1.DeploymentStrategy{
@@ -443,7 +466,7 @@ func GetDeploymentConfigWithEnvVars(namespace string, deploymentConfigName strin
 func GetDeploymentWithEnvVarSources(namespace string, deploymentName string) *appsv1.Deployment {
 	replicaset := int32(1)
 	return &appsv1.Deployment{
-		ObjectMeta: getObjectMeta(namespace, deploymentName, true, false, false),
+		ObjectMeta: getObjectMeta(namespace, deploymentName, true, false, false, false),
 		Spec: appsv1.DeploymentSpec{
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{"secondLabel": "temp"},
@@ -460,7 +483,7 @@ func GetDeploymentWithEnvVarSources(namespace string, deploymentName string) *ap
 func GetDeploymentWithPodAnnotations(namespace string, deploymentName string, both bool) *appsv1.Deployment {
 	replicaset := int32(1)
 	deployment := &appsv1.Deployment{
-		ObjectMeta: getObjectMeta(namespace, deploymentName, false, false, false),
+		ObjectMeta: getObjectMeta(namespace, deploymentName, false, false, false, false),
 		Spec: appsv1.DeploymentSpec{
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{"secondLabel": "temp"},
@@ -475,7 +498,7 @@ func GetDeploymentWithPodAnnotations(namespace string, deploymentName string, bo
 	if !both {
 		deployment.ObjectMeta.Annotations = nil
 	}
-	deployment.Spec.Template.ObjectMeta.Annotations = getAnnotations(deploymentName, true, false, false)
+	deployment.Spec.Template.ObjectMeta.Annotations = getAnnotations(deploymentName, true, false, false, false)
 	return deployment
 }
 
@@ -483,9 +506,11 @@ func GetDeploymentWithTypedAutoAnnotation(namespace string, deploymentName strin
 	replicaset := int32(1)
 	var objectMeta metav1.ObjectMeta
 	if resourceType == SecretResourceType {
-		objectMeta = getObjectMeta(namespace, deploymentName, false, true, false)
+		objectMeta = getObjectMeta(namespace, deploymentName, false, true, false, false)
 	} else if resourceType == ConfigmapResourceType {
-		objectMeta = getObjectMeta(namespace, deploymentName, false, false, true)
+		objectMeta = getObjectMeta(namespace, deploymentName, false, false, true, false)
+	} else if resourceType == SecretProviderClassPodStatusResourceType {
+		objectMeta = getObjectMeta(namespace, deploymentName, false, false, false, true)
 	}
 
 	return &appsv1.Deployment{
@@ -512,6 +537,8 @@ func GetDeploymentWithExcludeAnnotation(namespace string, deploymentName string,
 		annotation[options.SecretExcludeReloaderAnnotation] = deploymentName
 	} else if resourceType == ConfigmapResourceType {
 		annotation[options.ConfigmapExcludeReloaderAnnotation] = deploymentName
+	} else if resourceType == SecretProviderClassPodStatusResourceType {
+		annotation[options.SecretProviderClassExcludeReloaderAnnotation] = deploymentName
 	}
 
 	return &appsv1.Deployment{
@@ -537,7 +564,7 @@ func GetDeploymentWithExcludeAnnotation(namespace string, deploymentName string,
 // GetDaemonSet provides daemonset for testing
 func GetDaemonSet(namespace string, daemonsetName string) *appsv1.DaemonSet {
 	return &appsv1.DaemonSet{
-		ObjectMeta: getObjectMeta(namespace, daemonsetName, false, false, false),
+		ObjectMeta: getObjectMeta(namespace, daemonsetName, false, false, false, false),
 		Spec: appsv1.DaemonSetSpec{
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{"secondLabel": "temp"},
@@ -552,7 +579,7 @@ func GetDaemonSet(namespace string, daemonsetName string) *appsv1.DaemonSet {
 
 func GetDaemonSetWithEnvVars(namespace string, daemonSetName string) *appsv1.DaemonSet {
 	return &appsv1.DaemonSet{
-		ObjectMeta: getObjectMeta(namespace, daemonSetName, true, false, false),
+		ObjectMeta: getObjectMeta(namespace, daemonSetName, true, false, false, false),
 		Spec: appsv1.DaemonSetSpec{
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{"secondLabel": "temp"},
@@ -568,7 +595,7 @@ func GetDaemonSetWithEnvVars(namespace string, daemonSetName string) *appsv1.Dae
 // GetStatefulSet provides statefulset for testing
 func GetStatefulSet(namespace string, statefulsetName string) *appsv1.StatefulSet {
 	return &appsv1.StatefulSet{
-		ObjectMeta: getObjectMeta(namespace, statefulsetName, false, false, false),
+		ObjectMeta: getObjectMeta(namespace, statefulsetName, false, false, false, false),
 		Spec: appsv1.StatefulSetSpec{
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{"secondLabel": "temp"},
@@ -584,7 +611,7 @@ func GetStatefulSet(namespace string, statefulsetName string) *appsv1.StatefulSe
 // GetStatefulSet provides statefulset for testing
 func GetStatefulSetWithEnvVar(namespace string, statefulsetName string) *appsv1.StatefulSet {
 	return &appsv1.StatefulSet{
-		ObjectMeta: getObjectMeta(namespace, statefulsetName, true, false, false),
+		ObjectMeta: getObjectMeta(namespace, statefulsetName, true, false, false, false),
 		Spec: appsv1.StatefulSetSpec{
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{"secondLabel": "temp"},
@@ -606,6 +633,42 @@ func GetConfigmap(namespace string, configmapName string, testData string) *v1.C
 			Labels:    map[string]string{"firstLabel": "temp"},
 		},
 		Data: map[string]string{"test.url": testData},
+	}
+}
+
+func GetSecretProviderClass(namespace string, secretProviderClassName string, data string) *csiv1.SecretProviderClass {
+	return &csiv1.SecretProviderClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretProviderClassName,
+			Namespace: namespace,
+		},
+		Spec: csiv1.SecretProviderClassSpec{
+			Provider: "Test",
+			Parameters: map[string]string{
+				"parameter1": data,
+			},
+		},
+	}
+}
+
+func GetSecretProviderClassPodStatus(namespace string, secretProviderClassPodStatusName string, data string) *csiv1.SecretProviderClassPodStatus {
+	return &csiv1.SecretProviderClassPodStatus{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretProviderClassPodStatusName,
+			Namespace: namespace,
+		},
+		Status: csiv1.SecretProviderClassPodStatusStatus{
+			PodName:                 "test123",
+			SecretProviderClassName: secretProviderClassPodStatusName,
+			TargetPath:              "/var/lib/kubelet/d8771ddf-935a-4199-a20b-f35f71c1d9e7/volumes/kubernetes.io~csi/secrets-store-inline/mount",
+			Mounted:                 true,
+			Objects: []csiv1.SecretProviderClassObject{
+				{
+					ID:      "parameter1",
+					Version: data,
+				},
+			},
+		},
 	}
 }
 
@@ -680,7 +743,7 @@ func GetResourceSHAFromAnnotation(podAnnotations map[string]string) string {
 	return last.Hash
 }
 
-// ConvertResourceToSHA generates SHA from secret or configmap data
+// ConvertResourceToSHA generates SHA from secret, configmap or secretproviderclasspodstatus data
 func ConvertResourceToSHA(resourceType string, namespace string, resourceName string, data string) string {
 	values := []string{}
 	if resourceType == SecretResourceType {
@@ -693,6 +756,12 @@ func ConvertResourceToSHA(resourceType string, namespace string, resourceName st
 		for k, v := range configmap.Data {
 			values = append(values, k+"="+v)
 		}
+	} else if resourceType == SecretProviderClassPodStatusResourceType {
+		secretproviderclasspodstatus := GetSecretProviderClassPodStatus(namespace, resourceName, data)
+		for _, v := range secretproviderclasspodstatus.Status.Objects {
+			values = append(values, v.ID+"="+v.Version)
+		}
+		values = append(values, "SecretProviderClassName="+secretproviderclasspodstatus.Status.SecretProviderClassName)
 	}
 	sort.Strings(values)
 	return crypto.GenerateSHA(strings.Join(values, ";"))
@@ -705,6 +774,35 @@ func CreateConfigMap(client kubernetes.Interface, namespace string, configmapNam
 	_, err := configmapClient.Create(context.TODO(), GetConfigmap(namespace, configmapName, data), metav1.CreateOptions{})
 	time.Sleep(3 * time.Second)
 	return configmapClient, err
+}
+
+// CreateSecretProviderClass creates a SecretProviderClass in given namespace and returns the SecretProviderClassInterface
+func CreateSecretProviderClass(client csiclient.Interface, namespace string, secretProviderClassName string, data string) (csiclient_v1.SecretProviderClassInterface, error) {
+	logrus.Infof("Creating SecretProviderClass")
+	secretProviderClassClient := client.SecretsstoreV1().SecretProviderClasses(namespace)
+	_, err := secretProviderClassClient.Create(context.TODO(), GetSecretProviderClass(namespace, secretProviderClassName, data), metav1.CreateOptions{})
+	time.Sleep(3 * time.Second)
+	return secretProviderClassClient, err
+}
+
+// CreateSecretProviderClass creates a SecretProviderClassPodStatus in given namespace and returns the SecretProviderClassInterface
+func CreateSecretProviderClassPodStatus(client csiclient.Interface, namespace string, secretProviderClassPodStatusName string, data string) (csiclient_v1.SecretProviderClassPodStatusInterface, error) {
+	logrus.Infof("Creating SecretProviderClassPodStatus")
+	secretProviderClassPodStatusClient := client.SecretsstoreV1().SecretProviderClassPodStatuses(namespace)
+	secretProviderClassPodStatus := GetSecretProviderClassPodStatus(namespace, secretProviderClassPodStatusName, data)
+	_, err := secretProviderClassPodStatusClient.Create(context.TODO(), secretProviderClassPodStatus, metav1.CreateOptions{})
+	time.Sleep(3 * time.Second)
+	return secretProviderClassPodStatusClient, err
+}
+
+// CreateSecretProviderClassAndPodStatus creates a SecretProviderClass and SecretProviderClassPodStatus in given namespace
+func CreateSecretProviderClassAndPodStatus(client csiclient.Interface, namespace string, name string, data string) error {
+	_, err := CreateSecretProviderClass(client, namespace, name, data)
+	if err != nil {
+		return err
+	}
+	_, err = CreateSecretProviderClassPodStatus(client, namespace, name, data)
+	return err
 }
 
 // CreateSecret creates a secret in given namespace and returns the SecretInterface
@@ -915,6 +1013,14 @@ func DeleteConfigMap(client kubernetes.Interface, namespace string, configmapNam
 func DeleteSecret(client kubernetes.Interface, namespace string, secretName string) error {
 	logrus.Infof("Deleting secret %q.\n", secretName)
 	err := client.CoreV1().Secrets(namespace).Delete(context.TODO(), secretName, metav1.DeleteOptions{})
+	time.Sleep(3 * time.Second)
+	return err
+}
+
+// DeleteSecretProviderClass deletes a secretproviderclass in given namespace and returns the error if any
+func DeleteSecretProviderClass(client csiclient.Interface, namespace string, secretProviderClassName string) error {
+	logrus.Infof("Deleting secretproviderclass %q.\n", secretProviderClassName)
+	err := client.SecretsstoreV1().SecretProviderClasses(namespace).Delete(context.TODO(), secretProviderClassName, metav1.DeleteOptions{})
 	time.Sleep(3 * time.Second)
 	return err
 }
